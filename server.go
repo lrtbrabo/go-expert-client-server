@@ -27,6 +27,10 @@ type Cotacao struct {
 	gorm.Model
 }
 
+type BidResponse struct {
+  Bid string `json:"bid"`
+}
+
 func main() {
   db, err := NewDb()
   if err != nil {
@@ -35,23 +39,26 @@ func main() {
   db.AutoMigrate(&Cotacao{})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/cotacao", HandleGetCotacao)
+	mux.HandleFunc("/cotacao", func(w http.ResponseWriter, r *http.Request){
+    HandleGetCotacao(w, r, db)
+  })
   log.Println("Servidor Inicializado")
 	http.ListenAndServe(":8080", mux)
 }
 
-func HandleGetCotacao(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/cotacao" {
-		w.WriteHeader(http.StatusNotFound)
+func HandleGetCotacao(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+	if r.URL.Path != "/cotacao" { 
+    w.WriteHeader(http.StatusNotFound)
 		return
 	}
+  if r.Method != "GET" {
+    w.WriteHeader(http.StatusMethodNotAllowed)
+    return
+  }
 	w.Header().Set("Content-Type", "application/json")
+  ctx := context.Background()
 
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, time.Millisecond*200)
-	defer cancel()
-
-	cotacao, err := GetCotacao(ctx)
+	cotacao, err := GetCotacao(ctx, db)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Panicln(err)
@@ -61,13 +68,18 @@ func HandleGetCotacao(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(cotacao)
 }
 
-func GetCotacao(ctx context.Context) (*Cotacao, error) {
+func GetCotacao(ctx context.Context, db *gorm.DB) (*BidResponse, error) {
+  // Faz a chavamada para a API da economia.awesomeapi utilizando contexto 
+  ctx, cancel := context.WithTimeout(ctx, time.Millisecond * 200)
+  defer cancel()
+
 	req, _ := http.NewRequestWithContext(ctx, "GET", "https://economia.awesomeapi.com.br/json/last/USD-BRL", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 
+  // Trata o retorno da API para remover o USDBRL e deixar em uma formatação mais limpa
 	body, _ := io.ReadAll(resp.Body)
 	var cotacaotemp map[string]Cotacao
 	err = json.Unmarshal(body, &cotacaotemp)
@@ -77,23 +89,28 @@ func GetCotacao(ctx context.Context) (*Cotacao, error) {
 
 	cotacao := cotacaotemp["USDBRL"]
 
-  db, err := NewDb()
-  db.AutoMigrate(&Cotacao{})
-	err = WriteToDB(&cotacao, db)
+  // Escreve a cotação no banco
+	err = WriteToDB(&cotacao, ctx, db)
 	if err != nil {
 		return nil, err
 	}
 
-	return &cotacao, nil
+  // Limpa o resultado final apenas com o bid e retorna para o requisitante
+  bidResponse := BidResponse{
+    Bid: cotacao.Bid,
+  }
+
+	return &bidResponse, nil
 }
 
 func NewDb() (*gorm.DB, error) {
+  // Cria referência para banco de dados sqlite
 	db, err := gorm.Open(sqlite.Open("gorm.db"), &gorm.Config{})
 	return db, err
 }
 
-func WriteToDB(c *Cotacao, db *gorm.DB) error {
-	ctx := context.Background()
+func WriteToDB(c *Cotacao, ctx context.Context, db *gorm.DB) error {
+  // Gera contexto para timeout de escrita no banco e escreve a referência de cotação
 	ctx, cancel := context.WithTimeout(ctx, time.Millisecond*10)
 	defer cancel()
 
