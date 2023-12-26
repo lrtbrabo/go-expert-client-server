@@ -53,7 +53,7 @@ func GetBid() (*Bid, error) {
 func WriteToFile(bid *Bid) error {
   // Escreve a cotação do dólar no arquivo final
   write := []byte("Dólar: " + bid.Bid)
-  err := os.WriteFile("arquivo.txt", write, 0644)
+  err := os.WriteFile("cotacao.txt", write, 0644)
   if err != nil {
     log.Panicln(err)
     return err
